@@ -133,10 +133,7 @@ impl BitRank {
     pub fn rank_select(&self, idx: usize) -> (usize, Option<usize>) {
         let block_num = idx / BITS_PER_BLOCK;
         if block_num >= self.blocks.len() {
-            (
-                self.max_rank(), // fall back to 0 when the bitrank data structure is empty.
-                None,
-            )
+            (self.max_rank(), None)
         } else {
             let (rank, b_idx) = self.blocks[block_num].rank_select(idx % BITS_PER_BLOCK);
             (rank, b_idx.map(|i| (block_num * BITS_PER_BLOCK) + i))
@@ -144,58 +141,56 @@ impl BitRank {
     }
 }
 
-pub struct StringOffsets {
+pub struct Offsets {
     utf8_to_utf16: BitRank,
 }
 
-impl StringOffsets {
-    pub fn new(content: &str) -> Self {
-        new_converter(content.as_bytes())
+impl Offsets {
+    fn new_converter(content: &[u8]) -> Offsets {
+        #[inline(always)]
+        fn utf8_width(c: u8) -> usize {
+            const UTF8_WIDTH: u64 = 0x4322_0000_1111_1111;
+            ((UTF8_WIDTH >> ((c >> 4) * 4)) & 0xf) as usize
+        }
+        fn utf8_to_utf16_width(content: &[u8]) -> usize {
+            let len = utf8_width(content[0]);
+            match len {
+                0 => 0,
+                1..=3 => 1,
+                4 => 2,
+                _ => panic!("invalid utf8 char width: {}", len),
+            }
+        }
+        let n = content.len();
+        let mut utf16_builder = BitRankBuilder::with_capacity(n);
+        let mut i = 0;
+        while i < content.len() {
+            let c = content[i];
+            let utf8_len = utf8_width(c).max(1);
+            if i > 0 {
+                utf16_builder.push(i - 1);
+            }
+            if utf8_to_utf16_width(&content[i..]) > 1 {
+                utf16_builder.push(i);
+            }
+            i += utf8_len;
+        }
+        if !content.is_empty() {
+            utf16_builder.push(content.len() - 1);
+        }
+
+        Offsets {
+            utf8_to_utf16: utf16_builder.finish(),
+        }
     }
-    pub fn from_bytes(content: &[u8]) -> Self {
-        new_converter(content)
+    pub fn new(content: &str) -> Self {
+        Self::new_converter(content.as_bytes())
+    }
+    pub fn from_utf8_bytes(content: &[u8]) -> Self {
+        Self::new_converter(content)
     }
     pub fn utf8_to_utf16(&self, byte_number: usize) -> usize {
         self.utf8_to_utf16.rank(byte_number)
-    }
-}
-
-fn new_converter(content: &[u8]) -> StringOffsets {
-    #[inline(always)]
-    fn utf8_width(c: u8) -> usize {
-        const UTF8_WIDTH: u64 = 0x4322_0000_1111_1111;
-        ((UTF8_WIDTH >> ((c >> 4) * 4)) & 0xf) as usize
-    }
-
-    fn utf8_to_utf16_width(content: &[u8]) -> usize {
-        let len = utf8_width(content[0]);
-        match len {
-            0 => 0,
-            1..=3 => 1,
-            4 => 2,
-            _ => panic!("invalid utf8 char width: {}", len),
-        }
-    }
-    let n = content.len();
-    let mut utf16_builder = BitRankBuilder::with_capacity(n);
-    let mut i = 0;
-    while i < content.len() {
-        let c = content[i];
-        let utf8_len = utf8_width(c).max(1);
-        if i > 0 {
-            utf16_builder.push(i - 1);
-        }
-        if utf8_to_utf16_width(&content[i..]) > 1 {
-            utf16_builder.push(i);
-        }
-        i += utf8_len;
-    }
-    if !content.is_empty() {
-        utf16_builder.push(content.len() - 1);
-    }
-
-    StringOffsets {
-        utf8_to_utf16: utf16_builder.finish(),
     }
 }
 
@@ -209,7 +204,7 @@ mod tests {
 あいうえお@example.com
 ❤️ line0 ❤️Á 👋 @ a
 emailexample.com (Joe Smith)";
-        let offsets = StringOffsets::new(input);
+        let offsets = Offsets::new(input);
         assert_eq!(offsets.utf8_to_utf16(30), 26);
     }
 }
